@@ -81,7 +81,8 @@ python download_models.py u2net           # 或指定其它抠图模型
 | alpha_thr | INT | 30 | 前景 alpha 二值化阈值, 越高越严格 |
 | ocr_min_score | FLOAT | 0.5 | OCR 置信度下限, 低于此丢弃 |
 | vlm_model | STRING | qwen-vl-max | VLM 模型名(DashScope), 可改 qwen-vl-plus 等。也可用 env `DASHSCOPE_VLM_MODEL` / `DASHSCOPE_VLM_ENDPOINT` |
-| element_mode | 选择 | canvas | canvas=元素贴回原画布(便于合成, 4K 内存大) / cropped=输出裁剪小图(省内存, 原位见 bbox) |
+| element_mode | 选择 | canvas | 前景元素输出模式。canvas=元素贴回原画布(便于合成, 4K 内存大) / cropped=输出裁剪小图(省内存, 原位见 bbox) |
+| mask_mode | 选择 | canvas | 前景蒙版输出模式。canvas=蒙版贴回原画布(便于直接接遮罩节点) / cropped=输出裁剪范围内的蒙版(省内存) |
 
 > **多图说明**: `前景元素` 输出本就是 batch, 一个独立元素一张图。若拆出的元素偏少, 调小 `min_area`、把 `close_ksize` 设 0~1 即可拆得更细。
 

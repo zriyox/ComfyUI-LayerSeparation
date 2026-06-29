@@ -70,7 +70,11 @@ class LayerSeparationNode:
                 }),
                 "element_mode": (["canvas", "cropped"], {
                     "default": "canvas",
-                    "tooltip": "canvas=元素贴回原画布(便于直接合成, 4K 多元素内存大); cropped=只输出裁剪小图(省内存, 原位置见 manifest bbox)。",
+                    "tooltip": "前景元素输出模式。canvas=元素贴回原画布(便于直接合成, 4K 多元素内存大); cropped=只输出裁剪小图(省内存, 原位置见 manifest bbox)。",
+                }),
+                "mask_mode": (["canvas", "cropped"], {
+                    "default": "canvas",
+                    "tooltip": "前景蒙版输出模式。canvas=蒙版贴回原画布(便于直接接遮罩节点); cropped=只输出元素裁剪范围内的蒙版(省内存)。",
                 }),
             },
         }
@@ -110,9 +114,10 @@ class LayerSeparationNode:
             out.append(t)
         return torch.cat(out, 0)
 
-    def _composite_elements(self, manifest, workdir, element_mode="canvas"):
+    def _composite_elements(self, manifest, workdir, element_mode="canvas", mask_mode="canvas"):
         """把 N 个 RGBA 前景小图切成 (IMAGE list, MASK list)。每个元素是独立一帧:
-          canvas : 按 bbox 贴回 (W,H) 全画布, 与 manifest 渲染语义一致, 便于直接合成。
+          element_mode/mask_mode 可独立选择:
+          canvas : 按 bbox 贴回 (W,H) 全画布, 与 manifest 渲染语义一致, 便于直接合成/接遮罩。
           cropped: 各自输出自己 bbox 的真实尺寸 (w,h), 不补零到全体最大尺寸(那会把小元素
                    全撑到画布尺寸, 既不省内存也让裁剪图尺寸对不上 bbox)。
         返回 list[ [1,h,w,3] ] / list[ [1,h,w] ], 配合节点 OUTPUT_IS_LIST,
@@ -129,13 +134,18 @@ class LayerSeparationNode:
             if el.size != (w, h):
                 el = el.resize((w, h), Image.LANCZOS)
             if element_mode == "cropped":
-                canvas = el                                      # 元素本体, 真实 (w,h)
+                image_canvas = el                                # 元素本体, 真实 (w,h)
             else:
-                canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-                canvas.paste(el, (int(x), int(y)))
-            rgba = np.asarray(canvas, dtype=np.float32) / 255.0  # [h,w,4]
-            alpha = rgba[..., 3]
-            rgb = rgba[..., :3] * alpha[..., None]               # 透明处清零
+                image_canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+                image_canvas.paste(el, (int(x), int(y)))
+            if mask_mode == "cropped":
+                mask_canvas = el
+            else:
+                mask_canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+                mask_canvas.paste(el, (int(x), int(y)))
+            rgba = np.asarray(image_canvas, dtype=np.float32) / 255.0  # [h,w,4]
+            alpha = np.asarray(mask_canvas, dtype=np.float32)[..., 3] / 255.0
+            rgb = rgba[..., :3] * rgba[..., 3:4]                 # 透明处清零
             imgs.append(torch.from_numpy(rgb)[None, ...])        # [1,h,w,3]
             masks.append(torch.from_numpy(alpha)[None, ...])     # [1,h,w]
         return imgs, masks
@@ -174,7 +184,7 @@ class LayerSeparationNode:
     # ---------------- 主入口 ----------------
     def separate(self, image, use_vlm=True, fg_model="birefnet-general", dashscope_api_key="",
                  min_area=0.0015, close_ksize=3, alpha_thr=30, ocr_min_score=0.5,
-                 vlm_model="qwen-vl-max", element_mode="canvas"):
+                 vlm_model="qwen-vl-max", element_mode="canvas", mask_mode="canvas"):
         # 统一密钥/模型入口: 节点上填了就写进环境变量, pipeline 优先读 env;
         # 留空则沿用 env / 仓库 .env 的现有兜底。
         key = (dashscope_api_key or "").strip()
@@ -206,7 +216,7 @@ class LayerSeparationNode:
             if bg_pil.size != (W, H):  # 防御: 背景与 canvas 必须同尺寸
                 bg_pil = bg_pil.resize((W, H), Image.LANCZOS)
             bgs.append(self._pil_to_image_tensor(bg_pil))  # [1,H,W,3]
-            el, mk = self._composite_elements(manifest, workdir, element_mode=element_mode)
+            el, mk = self._composite_elements(manifest, workdir, element_mode=element_mode, mask_mode=mask_mode)
             elem_list.extend(el)
             mask_list.extend(mk)
             fgm, fgtm = self._build_full_masks(manifest, workdir)
