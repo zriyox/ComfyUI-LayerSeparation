@@ -11,8 +11,10 @@
         "outputs": {
             "0": { "name": "背景层", "tooltip": "LaMa 修复后的干净背景 (IMAGE)。" },
             "1": { "name": "前景元素", "tooltip": "抠出的前景元素 (IMAGE batch)。" },
-            "2": { "name": "前景蒙版", "tooltip": "每个前景元素的 alpha 蒙版 (MASK batch)。" },
-            "3": { "name": "manifest", "tooltip": "画布尺寸 / 元素 bbox / 文字信息的 JSON 字符串。" }
+            "2": { "name": "前景蒙版", "tooltip": "每个前景元素的 alpha 蒙版 (逐元素 list, 各自真实尺寸)。" },
+            "3": { "name": "manifest", "tooltip": "画布尺寸 / 元素 bbox / 文字信息的 JSON 字符串。" },
+            "4": { "name": "元素遮罩", "tooltip": "仅前景元素的全画布并集遮罩(各元素真实 alpha 形状, 与原图同尺寸)。重绘背景用这张。" },
+            "5": { "name": "元素+文字遮罩", "tooltip": "前景元素 ∪ OCR 文字区域的全画布并集遮罩(与原图同尺寸)。" }
         }
     },
     "LayerSeparationSaveText": {

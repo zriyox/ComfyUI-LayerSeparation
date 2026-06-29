@@ -26,8 +26,11 @@ class LayerSeparationNode:
 
     CATEGORY = "image/layer_separation"
     FUNCTION = "separate"
-    RETURN_TYPES = ("IMAGE", "IMAGE", "MASK", "STRING")
-    RETURN_NAMES = ("background", "elements", "element_masks", "manifest")
+    # 末尾追加两张全画布并集遮罩(fg_mask / fg_text_mask), 不动前 4 个口的槽位, 现有连线不断。
+    RETURN_TYPES = ("IMAGE", "IMAGE", "MASK", "STRING", "MASK", "MASK")
+    RETURN_NAMES = ("background", "elements", "element_masks", "manifest", "fg_mask", "fg_text_mask")
+    # elements/element_masks 是逐元素 list(每张各自真实尺寸); 其余(含两张全画布遮罩)是单值/batch。
+    OUTPUT_IS_LIST = (False, True, True, False, False, False)
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -108,17 +111,17 @@ class LayerSeparationNode:
         return torch.cat(out, 0)
 
     def _composite_elements(self, manifest, workdir, element_mode="canvas"):
-        """把 N 个 RGBA 前景小图切成 IMAGE batch + MASK batch。
+        """把 N 个 RGBA 前景小图切成 (IMAGE list, MASK list)。每个元素是独立一帧:
           canvas : 按 bbox 贴回 (W,H) 全画布, 与 manifest 渲染语义一致, 便于直接合成。
-          cropped: 只输出裁剪后的元素小图(统一补零到全体 bbox 最大宽高), 省内存; 原位置见 bbox。
-        RGB 在 alpha=0 处清零, 让 PreviewImage 只显示抠图本体。"""
+          cropped: 各自输出自己 bbox 的真实尺寸 (w,h), 不补零到全体最大尺寸(那会把小元素
+                   全撑到画布尺寸, 既不省内存也让裁剪图尺寸对不上 bbox)。
+        返回 list[ [1,h,w,3] ] / list[ [1,h,w] ], 配合节点 OUTPUT_IS_LIST,
+        下游 Preview/Save 逐帧各自原尺寸接收。RGB 在 alpha=0 处清零, 只显示抠图本体。"""
         W = int(manifest["canvas"]["width"])
         H = int(manifest["canvas"]["height"])
         items = [it for it in manifest.get("images", []) if it["bbox"][2] > 0 and it["bbox"][3] > 0]
-        if not items:  # N=0 兜底, 给下游一帧全0, 避免空 batch 崩
-            return torch.zeros((1, H, W, 3), dtype=torch.float32), torch.zeros((1, H, W), dtype=torch.float32)
-        cw = max(it["bbox"][2] for it in items)
-        ch = max(it["bbox"][3] for it in items)
+        if not items:  # N=0 兜底, 给下游一帧全0, 避免空 list 崩
+            return [torch.zeros((1, H, W, 3), dtype=torch.float32)], [torch.zeros((1, H, W), dtype=torch.float32)]
         imgs, masks = [], []
         for item in items:
             x, y, w, h = item["bbox"]
@@ -126,17 +129,47 @@ class LayerSeparationNode:
             if el.size != (w, h):
                 el = el.resize((w, h), Image.LANCZOS)
             if element_mode == "cropped":
-                canvas = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
-                canvas.paste(el, (0, 0))
+                canvas = el                                      # 元素本体, 真实 (w,h)
             else:
                 canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
                 canvas.paste(el, (int(x), int(y)))
-            rgba = np.asarray(canvas, dtype=np.float32) / 255.0  # [H,W,4]
+            rgba = np.asarray(canvas, dtype=np.float32) / 255.0  # [h,w,4]
             alpha = rgba[..., 3]
             rgb = rgba[..., :3] * alpha[..., None]               # 透明处清零
-            imgs.append(torch.from_numpy(rgb))
-            masks.append(torch.from_numpy(alpha))
-        return torch.stack(imgs, 0), torch.stack(masks, 0)
+            imgs.append(torch.from_numpy(rgb)[None, ...])        # [1,h,w,3]
+            masks.append(torch.from_numpy(alpha)[None, ...])     # [1,h,w]
+        return imgs, masks
+
+    def _build_full_masks(self, manifest, workdir):
+        """构建两张与原图同尺寸 (H,W) 的并集遮罩, 供「遮罩重绘」一次跑完直接用:
+          fg_mask      : 仅前景元素 —— 各元素真实 alpha 形状贴回各自 bbox 后取并集(max)。
+          fg_text_mask : 前景元素 ∪ OCR 文字 bbox 矩形(文字层无 alpha, 按矩形覆盖)。
+        与 manifest/background 同尺寸, 数值 0~1。返回 ([1,H,W], [1,H,W])。"""
+        W = int(manifest["canvas"]["width"])
+        H = int(manifest["canvas"]["height"])
+        elem = np.zeros((H, W), dtype=np.float32)
+        for item in manifest.get("images", []):
+            x, y, w, h = item["bbox"]
+            if w <= 0 or h <= 0:
+                continue
+            el = Image.open(Path(workdir) / item["url"]).convert("RGBA")
+            if el.size != (w, h):
+                el = el.resize((w, h), Image.LANCZOS)
+            a = np.asarray(el, dtype=np.float32)[..., 3] / 255.0  # [h,w] alpha
+            x0, y0 = max(0, int(x)), max(0, int(y))
+            x1, y1 = min(W, x0 + int(w)), min(H, y0 + int(h))
+            if x1 <= x0 or y1 <= y0:
+                continue
+            region = elem[y0:y1, x0:x1]
+            np.maximum(region, a[: y1 - y0, : x1 - x0], out=region)  # 并集
+        elem_text = elem.copy()
+        for t in manifest.get("texts", []):
+            x, y, w, h = t["bbox"]
+            x0, y0 = max(0, int(x)), max(0, int(y))
+            x1, y1 = min(W, int(x) + int(w)), min(H, int(y) + int(h))
+            if x1 > x0 and y1 > y0:
+                elem_text[y0:y1, x0:x1] = 1.0                       # 文字按矩形覆盖
+        return torch.from_numpy(elem)[None, ...], torch.from_numpy(elem_text)[None, ...]
 
     # ---------------- 主入口 ----------------
     def separate(self, image, use_vlm=True, fg_model="birefnet-general", dashscope_api_key="",
@@ -153,7 +186,10 @@ class LayerSeparationNode:
         fg_kwargs = {"min_area": float(min_area), "close_ksize": int(close_ksize), "alpha_thr": int(alpha_thr)}
 
         # 遍历整个输入 batch, 逐帧分离; B=1 时与单图行为一致。
-        bgs, elem_batches, mask_batches, manifests = [], [], [], []
+        # 元素/蒙版按帧收成扁平 list(每张各自真实尺寸, 不跨帧补零拼接)。
+        # fg_mask/fg_text_mask 是全画布单值, 按帧 batch 拼接(与 background 对齐)。
+        bgs, elem_list, mask_list, manifests = [], [], [], []
+        fgm_list, fgtm_list = [], []
         for b in range(image.shape[0]):
             workdir = tempfile.mkdtemp(prefix="comfy_layersep_")
             input_png = Path(workdir) / "input.png"
@@ -171,16 +207,23 @@ class LayerSeparationNode:
                 bg_pil = bg_pil.resize((W, H), Image.LANCZOS)
             bgs.append(self._pil_to_image_tensor(bg_pil))  # [1,H,W,3]
             el, mk = self._composite_elements(manifest, workdir, element_mode=element_mode)
-            elem_batches.append(el)
-            mask_batches.append(mk)
+            elem_list.extend(el)
+            mask_list.extend(mk)
+            fgm, fgtm = self._build_full_masks(manifest, workdir)
+            fgm_list.append(fgm)
+            fgtm_list.append(fgtm)
             manifests.append(manifest)
 
         background = self._concat_image_batches(bgs)
-        elements = self._concat_image_batches(elem_batches)
-        element_masks = self._concat_image_batches(mask_batches)
+        # elements/element_masks 是 list(OUTPUT_IS_LIST), 逐元素各自真实尺寸, 不跨帧补零。
+        elements = elem_list
+        element_masks = mask_list
+        # 全画布并集遮罩: 多帧按 batch 拼接, 与 background 帧对齐。
+        fg_mask = self._concat_image_batches(fgm_list)
+        fg_text_mask = self._concat_image_batches(fgtm_list)
         # 单图输出 manifest 对象(向后兼容); 多图输出 manifest 数组。
         manifest_json = json.dumps(manifests[0] if len(manifests) == 1 else manifests, ensure_ascii=False)
-        return (background, elements, element_masks, manifest_json)
+        return (background, elements, element_masks, manifest_json, fg_mask, fg_text_mask)
 
 
 class SaveTextNode:
