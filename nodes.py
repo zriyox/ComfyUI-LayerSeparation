@@ -17,8 +17,8 @@ from PIL import Image
 # pipeline.py 已 vendor 进本插件目录, 包内相对导入, 插件自包含。
 from . import pipeline
 
-# rembg 支持的抠图模型(前景层)。birefnet 系列质量最好, u2net/isnet 更快更省显存。
-_FG_MODELS = ["birefnet-general", "birefnet-massive", "isnet-general-use", "u2net", "u2netp"]
+# rembg 支持的抠图模型(前景层)。birefnet/RMBG 质量较好, u2net/isnet 更快更省显存。
+_FG_MODELS = ["birefnet-general", "birefnet-massive", "bria-rmbg", "isnet-general-use", "u2net", "u2netp"]
 
 
 class LayerSeparationNode:
@@ -42,7 +42,7 @@ class LayerSeparationNode:
                 "use_vlm": ("BOOLEAN", {"default": True, "label_on": "VLM文字分类开", "label_off": "VLM关"}),
                 "fg_model": (_FG_MODELS, {
                     "default": "birefnet-general",
-                    "tooltip": "前景抠图模型。birefnet 系列质量最好, u2net/isnet 更快更省显存。",
+                    "tooltip": "前景抠图模型。birefnet/RMBG 质量较好, u2net/isnet 更快更省显存。",
                 }),
                 "dashscope_api_key": ("STRING", {
                     "default": "", "multiline": False,
