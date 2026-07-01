@@ -5,7 +5,7 @@
         "inputs": {
             "image": { "name": "图像", "display_name": "图像", "tooltip": "输入的详情图(IMAGE)。" },
             "use_vlm": { "name": "VLM文字分类", "display_name": "VLM文字分类", "tooltip": "开启后用 qwen-vl 对文字做分类(联网); 关闭则纯 OCR, 不联网、不需密钥。" },
-            "fg_model": { "name": "抠图模型", "display_name": "抠图模型", "tooltip": "前景抠图模型。birefnet 质量最好, u2net/isnet 更快更省显存。" },
+            "fg_model": { "name": "抠图模型", "display_name": "抠图模型", "tooltip": "前景抠图模型。birefnet/RMBG 质量较好, u2net/isnet 更快更省显存。" },
             "dashscope_api_key": { "name": "DashScope密钥", "display_name": "DashScope密钥", "tooltip": "qwen-vl 密钥。留空则用环境变量 DASHSCOPE_API_KEY 或本插件目录 .env。VLM关闭时忽略。" },
             "min_area": { "name": "最小面积", "display_name": "最小面积", "tooltip": "最小元素面积占比。越小保留越多小元素, 也更易出噪点。" },
             "close_ksize": { "name": "闭运算核", "display_name": "闭运算核", "tooltip": "形态学闭运算核大小。0/1=关闭; 越大越容易把多个元素合并。" },
