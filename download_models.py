@@ -4,8 +4,8 @@
 
 用法:
   python download_models.py                      # 下默认 birefnet-general + LaMa
-  python download_models.py u2net isnet-general-use   # 指定要预热的抠图模型
-  RembG 模型可选: birefnet-general / birefnet-massive / isnet-general-use / u2net / u2netp
+  python download_models.py bria-rmbg u2net      # 指定要预热的抠图模型
+  RembG 模型可选: birefnet-general / birefnet-massive / bria-rmbg / isnet-general-use / u2net / u2netp
 """
 import sys
 import os
